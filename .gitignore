@@ -1,2 +1,6 @@
 skratches
 *.log
+*.pyc
+*.json
+*.csv
+temp.py

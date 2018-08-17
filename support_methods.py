@@ -1,10 +1,13 @@
 import os
 import re
 import ast
-import sys
+import git
+import csv
+import json
 import collections
+import logging
 from nltk import pos_tag, word_tokenize
-""", punkt"""
+from constants import FILES_AMOUNT
 
 
 def flattening(l):
@@ -16,85 +19,109 @@ def flattening(l):
             yield e
 
 
-def is_verb(word=None):
-    if word is None:
-        return False
-    else:
-        pos_info = pos_tag(word_tokenize(word))
-        return pos_info[0][1] in ('VB', 'VBD', 'VBZ', 'VBN')
-
-
-def only_astF_instances(array):
-    node_list = [map(is_astF_instance_filter(y), ast.walk(y)) for y in array]
-    return filter(None, node_list)
-
-
-def filter_only_py(file, from_path):
-    if file != None and file.endswith('.py'):
+def extention_only(file, from_path, extention):
+    if file is not None and file.endswith(extention):
         return os.path.join(from_path, file)
 
 
-def the_most_common_of(objects, top_size=10):
+def the_most_common_of(objects, top_size=FILES_AMOUNT):
     return collections.Counter(objects).most_common(top_size)
 
 
-def is_astF_instance_filter(node):
-    if isinstance(node, ast.FunctionDef):
-        return node.name.lower()
-
-
-def getting_verbs(function_name):
-    return [word for word in function_name.split('_') if is_verb(word)]
-
-
-def is_private(thing):
-    if not type(thing).__name__.startswith('__'):
-        if not type(thing).__name__.endswith('__'):
-            return type(thing).__name__
-
-
-def stringify(not_a_string):
-    return "%s" % not_a_string
-
-
-def getting_file_path(path_with_file):
+def get_current_dir_path(path_with_file=os.path.realpath(__file__)):
     exclusion_regex = "[\/][\w]+['.'][\D]+"
     dir_path = re.split(exclusion_regex, path_with_file)[0]
     return dir_path
 
 
-def args_handler(arguments):
-    args = []
-    args.append(arguments)
-    args = filter(None, args)
-    return list(flattening(args))
+def ast_file_parser(file):
+    with open(file, 'r') as file_viewer:
+        file_content = file_viewer.read()
+    try:
+        return ast.parse(file_content)
+    except SyntaxError as e:
+        logging.error(e)
+        return None
 
 
-def path_setter(path=sys.argv):
-    global PATH
-    PATH = getting_file_path(os.path.realpath(__file__))
-    args = args_handler(path)
-    if len(args) >= 3:
-        if args[1] == '-d':
-            PATH = args[2]
+def variables_names(nodes):
+    ast_name_nodes = map(is_astName_filter, nodes)
+    ast_name_nodes = filter(None, ast_name_nodes)
+    variables = [node.id for node in ast_name_nodes]
+    splitted = split_snake_case_names_into_words(variables)
+    variables = filter(None, splitted)
+    return variables
+
+
+def is_astName_filter(a):
+    if isinstance(a, ast.Name):
+        return a
+
+
+def is_astFDef_filter(a):
+    if isinstance(a, ast.FunctionDef):
+        return a
+
+
+def functions_names(nodes):
+    ast_fdef_nodes = map(is_astFDef_filter, nodes)
+    ast_fdef_nodes = filter(None, ast_fdef_nodes)
+    function_names = [node.name for node in ast_fdef_nodes]
+    splitted = split_snake_case_names_into_words(function_names)
+    function_names = filter(None, splitted)
+    return function_names
+
+
+def git_clone(repo, destination, required_branch='master'):
+    repo_name_re = re.search("[\w]+['.'][git]+", repo).group(0)
+    folder_name = re.split("[.][\w]+", repo_name_re)[0]
+    location = destination+'/'+folder_name+'/'+required_branch
+    git.Repo.clone_from(
+                        repo,
+                        location,
+                        branch=required_branch
+                        )
+    logging.info('Repo downloaded to: '+location)
+    return location
+
+
+def location_determining(source, path):
+    if source is not 'none':
+        location = git_clone(source, path)
     else:
-        inputed_value = raw_input('''
-            You didn\'t specify the directory you want
-            to scan, may I offer current directory?: y/n?\n''')
-        if inputed_value == 'y':
-            PATH = getting_file_path(os.path.realpath(__file__))
-        else:
-            inputed_value = raw_input('Please type in the path: \n')
-            PATH = inputed_value
-    return PATH
+        location = path
+    return location
 
 
-def get_all_names(trees):
-    for t in trees:
-        n = [node.id for node in ast.walk(t) if isinstance(node, ast.Name)]
-    return filter(None, n)
+def output_method(data_format, data):
+    if data_format == 'json':
+        with open('result.json', 'w') as json_file:
+            json.dump(data, json_file)
+    elif data_format == 'csv':
+        with open('result.csv', 'wb') as csv_file:
+            csv_result = csv.writer(csv_file, quoting=csv.QUOTE_ALL)
+            csv_result.writerow(data)
+    else:
+        logging.info(data)
+
+
+def search_in(list, required_part_of_speech):
+    extracted = [word_extraction(i, required_part_of_speech) for i in list]
+    return filter(None, extracted)
+
+
+def word_extraction(word, required_part_of_speech):
+    tagged_word = pos_tag(word_tokenize(word))
+    if required_part_of_speech == 'verb' or 'verbs':
+        if tagged_word[0][1] in ('VB', 'VBD', 'VBZ', 'VBN', 'VBG'):
+            return word
+    elif required_part_of_speech == 'noun' or 'nouns':
+        if tagged_word[0][1] == ('NN'):
+            return word
+    else:
+        return 'Rather verb or noun'
 
 
 def split_snake_case_names_into_words(from_list):
-    nested_array = [i.split('_') for i in from_list]
+    nested_array = [i.split('_') for i in from_list if (type(i) is not 'bool')]
     return list(flattening(nested_array))
